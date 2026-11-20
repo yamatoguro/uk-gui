@@ -1,0 +1,91 @@
+# CI — uk-gui (painel multiplataforma no host)
+
+# A stack do uk-gui ainda nao foi decidida (ver docs/context-map.md, decisao 1).
+# Este workflow NAO presume linguagem: ele detecta o projeto e reporta.
+# Quando a stack for definida em ADR, substitua o job "detect" pelo build real.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    outputs:
+      kind: ${{ steps.check.outputs.kind }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: check
+        run: |
+          KIND="none"
+          if [ -f Cargo.toml ]; then KIND="rust"; fi
+          if [ -f CMakeLists.txt ]; then KIND="cmake"; fi
+          if [ -f package.json ]; then KIND="node"; fi
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          echo "Stack detectada: $KIND"
+
+          if [ "$KIND" = "none" ]; then
+            echo "::warning::uk-gui sem stack definida. Nada foi compilado. Veja docs/context-map.md decisao 1."
+          fi
+
+  rust:
+    needs: detect
+    if: needs.detect.outputs.kind == 'rust'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar toolchain
+        run: rustup component add clippy rustfmt
+      - name: Formatar
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Testar
+        run: cargo test --all
+
+  cmake:
+    needs: detect
+    if: needs.detect.outputs.kind == 'cmake'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configurar
+        run: |
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_CXX_FLAGS="-Wall -Wextra -Werror -Wconversion -Wshadow -Wold-style-cast"
+      - name: Compilar
+        run: cmake --build build
+      - name: Testar
+        run: ctest --test-dir build --output-on-failure
+
+  node:
+    needs: detect
+    if: needs.detect.outputs.kind == 'node'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Instalar
+        run: npm ci
+      - name: Verificar tipos
+        run: npm run --if-present typecheck
+      - name: Testar
+        run: npm test --if-present
+
+  no-stack:
+    needs: detect
+    if: needs.detect.outputs.kind == 'none'
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo "::warning::uk-gui sem stack definida — build ignorado."
+          echo "Decisao pendente em docs/context-map.md (decisao 1)."
